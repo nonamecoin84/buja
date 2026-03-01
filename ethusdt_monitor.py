@@ -4,7 +4,7 @@ from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 
-BASE = "https://api.bybit.com"
+BASE = "https://www.okx.com"
 KST  = timezone(timedelta(hours=9))
 
 # GitHub Secrets에서 자동으로 읽어옴
@@ -31,33 +31,29 @@ def send_telegram(text):
 
 
 # ────────────────────────────────────────
-# Bybit 데이터
+# OKX 데이터
+# OKX 캔들 구조: [ts, o, h, l, c, vol, volCcy, volCcyQuote, confirm]
 # ────────────────────────────────────────
-def fetch_klines(symbol, interval="15", limit=3):
+def fetch_klines(inst_id, bar="15m", limit=3):
     params = urlencode({
-        "category": "linear",
-        "symbol": symbol,
-        "interval": interval,
+        "instId": inst_id,
+        "bar": bar,
         "limit": limit
     })
-    url = f"{BASE}/v5/market/kline?{params}"
+    url = f"{BASE}/api/v5/market/candles?{params}"
     req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-        # Bybit은 최신순으로 반환 → 역순 정렬
-        return list(reversed(data["result"]["list"]))
+        # OKX는 최신순 반환 → 역순 정렬
+        return list(reversed(data["data"]))
 
-def fetch_funding(symbol):
-    params = urlencode({
-        "category": "linear",
-        "symbol": symbol,
-        "limit": 1
-    })
-    url = f"{BASE}/v5/market/funding/history?{params}"
+def fetch_funding(inst_id):
+    params = urlencode({"instId": inst_id})
+    url = f"{BASE}/api/v5/public/funding-rate?{params}"
     req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-        items = data["result"]["list"]
+        items = data["data"]
         if items:
             return float(items[0]["fundingRate"]) * 100
         return None
@@ -68,7 +64,6 @@ def utc_ms_to_kst(ms):
 
 # ────────────────────────────────────────
 # 메시지 포맷
-# Bybit kline 구조: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
 # ────────────────────────────────────────
 def build_message(eth, btc, funding_line):
     t  = utc_ms_to_kst(eth[0]).strftime("%Y-%m-%d %H:%M KST")
@@ -106,8 +101,9 @@ def build_message(eth, btc, funding_line):
 def main():
     print("=== ETHUSDT 15분봉 감시 실행 ===")
 
-    eth_kl = fetch_klines("ETHUSDT", "15", 3)
-    btc_kl = fetch_klines("BTCUSDT", "15", 3)
+    # OKX는 선물 심볼: ETH-USDT-SWAP, BTC-USDT-SWAP
+    eth_kl = fetch_klines("ETH-USDT-SWAP", "15m", 3)
+    btc_kl = fetch_klines("BTC-USDT-SWAP", "15m", 3)
 
     # 마감된 봉 = 인덱스 -2
     eth_closed = eth_kl[-2]
@@ -119,7 +115,7 @@ def main():
     funding_line = ""
     if candle_time.minute == 0:
         try:
-            fr = fetch_funding("ETHUSDT")
+            fr = fetch_funding("ETH-USDT-SWAP")
             if fr is not None:
                 funding_line = f"Funding: {fr:+.4f}%"
         except:
