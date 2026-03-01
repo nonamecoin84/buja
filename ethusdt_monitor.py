@@ -4,7 +4,7 @@ from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 
-BASE = "https://fapi.binance.com"
+BASE = "https://api.bybit.com"
 KST  = timezone(timedelta(hours=9))
 
 # GitHub Secrets에서 자동으로 읽어옴
@@ -31,34 +31,47 @@ def send_telegram(text):
 
 
 # ────────────────────────────────────────
-# 바이낸스 데이터
+# Bybit 데이터
 # ────────────────────────────────────────
-def fetch_klines(symbol, interval="15m", limit=2):
-    params = urlencode({"symbol": symbol, "interval": interval, "limit": limit})
-    url = f"{BASE}/fapi/v1/klines?{params}"
-    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-def fetch_funding(symbol):
-    params = urlencode({"symbol": symbol, "limit": 1})
-    url = f"{BASE}/fapi/v1/fundingRate?{params}"
+def fetch_klines(symbol, interval="15", limit=3):
+    params = urlencode({
+        "category": "linear",
+        "symbol": symbol,
+        "interval": interval,
+        "limit": limit
+    })
+    url = f"{BASE}/v5/market/kline?{params}"
     req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
     with urlopen(req, timeout=10) as resp:
         data = json.loads(resp.read().decode("utf-8"))
-        if data:
-            return float(data[-1]["fundingRate"]) * 100
+        # Bybit은 최신순으로 반환 → 역순 정렬
+        return list(reversed(data["result"]["list"]))
+
+def fetch_funding(symbol):
+    params = urlencode({
+        "category": "linear",
+        "symbol": symbol,
+        "limit": 1
+    })
+    url = f"{BASE}/v5/market/funding/history?{params}"
+    req = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urlopen(req, timeout=10) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+        items = data["result"]["list"]
+        if items:
+            return float(items[0]["fundingRate"]) * 100
         return None
 
 def utc_ms_to_kst(ms):
-    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).astimezone(KST)
+    return datetime.fromtimestamp(int(ms) / 1000, tz=timezone.utc).astimezone(KST)
 
 
 # ────────────────────────────────────────
 # 메시지 포맷
+# Bybit kline 구조: [startTime, openPrice, highPrice, lowPrice, closePrice, volume, turnover]
 # ────────────────────────────────────────
 def build_message(eth, btc, funding_line):
-    t  = utc_ms_to_kst(int(eth[0])).strftime("%Y-%m-%d %H:%M KST")
+    t  = utc_ms_to_kst(eth[0]).strftime("%Y-%m-%d %H:%M KST")
     eo, eh, el, ec = eth[1], eth[2], eth[3], eth[4]
     ev = float(eth[5])
     bo, bh, bl, bc = btc[1], btc[2], btc[3], btc[4]
@@ -93,13 +106,14 @@ def build_message(eth, btc, funding_line):
 def main():
     print("=== ETHUSDT 15분봉 감시 실행 ===")
 
-    eth_kl = fetch_klines("ETHUSDT", "15m", 2)
-    btc_kl = fetch_klines("BTCUSDT", "15m", 2)
+    eth_kl = fetch_klines("ETHUSDT", "15", 3)
+    btc_kl = fetch_klines("BTCUSDT", "15", 3)
 
+    # 마감된 봉 = 인덱스 -2
     eth_closed = eth_kl[-2]
     btc_closed = btc_kl[-2]
 
-    candle_time = utc_ms_to_kst(int(eth_closed[0]))
+    candle_time = utc_ms_to_kst(eth_closed[0])
 
     # 펀딩비 (매 정각에만)
     funding_line = ""
