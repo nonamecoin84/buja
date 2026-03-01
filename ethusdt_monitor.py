@@ -1,16 +1,15 @@
 import json
-import time
+import os
 from urllib.request import urlopen, Request
 from urllib.parse import urlencode
 from datetime import datetime, timezone, timedelta
 
-BASE    = "https://fapi.binance.com"
-KST     = timezone(timedelta(hours=9))
-SYMBOLS = ["ETHUSDT", "BTCUSDT"]
+BASE = "https://fapi.binance.com"
+KST  = timezone(timedelta(hours=9))
 
-# ✅ 여기에 본인 값 입력
-TELEGRAM_TOKEN   = "bot_8729423940:AAEtvv2YgpOwMaCug-HysUM0qzQikILhPe8"
-TELEGRAM_CHAT_ID = "-1003792921380"
+# GitHub Secrets에서 자동으로 읽어옴
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 
 
 # ────────────────────────────────────────
@@ -59,13 +58,12 @@ def utc_ms_to_kst(ms):
 # 메시지 포맷
 # ────────────────────────────────────────
 def build_message(eth, btc, funding_line):
-    t   = utc_ms_to_kst(int(eth[0])).strftime("%Y-%m-%d %H:%M KST")
+    t  = utc_ms_to_kst(int(eth[0])).strftime("%Y-%m-%d %H:%M KST")
     eo, eh, el, ec = eth[1], eth[2], eth[3], eth[4]
-    ev  = float(eth[5])
+    ev = float(eth[5])
     bo, bh, bl, bc = btc[1], btc[2], btc[3], btc[4]
-    bv  = float(btc[5])
+    bv = float(btc[5])
 
-    # 등락 방향 이모지
     eth_arrow = "🟢" if float(ec) >= float(eo) else "🔴"
     btc_arrow = "🟢" if float(bc) >= float(bo) else "🔴"
 
@@ -90,63 +88,32 @@ def build_message(eth, btc, funding_line):
 
 
 # ────────────────────────────────────────
-# 대기
-# ────────────────────────────────────────
-def wait_until_next_15m():
-    now = datetime.now(tz=KST)
-    minutes_to_wait = 15 - (now.minute % 15)
-    seconds_to_wait = minutes_to_wait * 60 - now.second + 3  # 3초 여유
-    print(f"  → 다음 마감까지 {minutes_to_wait}분 대기중...")
-    time.sleep(seconds_to_wait)
-
-
-# ────────────────────────────────────────
-# 메인
+# 메인 (1회 실행 구조)
 # ────────────────────────────────────────
 def main():
-    print("=== ETHUSDT 실시간 감시 시작 ===")
-    send_telegram("✅ ETHUSDT 모니터링 봇 시작!")
+    print("=== ETHUSDT 15분봉 감시 실행 ===")
 
-    last_candle_time = None
+    eth_kl = fetch_klines("ETHUSDT", "15m", 2)
+    btc_kl = fetch_klines("BTCUSDT", "15m", 2)
 
-    while True:
+    eth_closed = eth_kl[-2]
+    btc_closed = btc_kl[-2]
+
+    candle_time = utc_ms_to_kst(int(eth_closed[0]))
+
+    # 펀딩비 (매 정각에만)
+    funding_line = ""
+    if candle_time.minute == 0:
         try:
-            wait_until_next_15m()
+            fr = fetch_funding("ETHUSDT")
+            if fr is not None:
+                funding_line = f"Funding: {fr:+.4f}%"
+        except:
+            pass
 
-            eth_kl = fetch_klines("ETHUSDT", "15m", 2)
-            btc_kl = fetch_klines("BTCUSDT", "15m", 2)
-
-            eth_closed = eth_kl[-2]
-            btc_closed = btc_kl[-2]
-
-            candle_time = utc_ms_to_kst(int(eth_closed[0]))
-
-            if candle_time == last_candle_time:
-                continue
-            last_candle_time = candle_time
-
-            # 펀딩비 (매 정각)
-            funding_line = ""
-            if candle_time.minute == 0:
-                try:
-                    fr = fetch_funding("ETHUSDT")
-                    if fr is not None:
-                        funding_line = f"Funding: {fr:+.4f}%"
-                except:
-                    pass
-
-            # 텔레그램 전송
-            msg = build_message(eth_closed, btc_closed, funding_line)
-            send_telegram(msg)
-            print(f"[{candle_time.strftime('%H:%M')}] 전송 완료")
-
-        except KeyboardInterrupt:
-            print("\n감시 종료")
-            send_telegram("🛑 모니터링 봇 종료")
-            break
-        except Exception as e:
-            print(f"오류: {e} — 30초 후 재시도")
-            time.sleep(30)
+    msg = build_message(eth_closed, btc_closed, funding_line)
+    send_telegram(msg)
+    print(f"[{candle_time.strftime('%H:%M')}] 전송 완료")
 
 if __name__ == "__main__":
     main()
